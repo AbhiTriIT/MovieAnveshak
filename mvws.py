@@ -164,7 +164,6 @@ elif st.session_state.role == "admin_dashboard":
         conn = get_db_connection()
         shows = conn.execute("SELECT * FROM shows").fetchall()
         
-        # Add Show Feature
         with st.expander("+ Add New Show"):
             new_title = st.text_input("Movie Title")
             new_date = st.text_input("Date (YYYY-MM-DD)", value="2026-11-20")
@@ -185,7 +184,6 @@ elif st.session_state.role == "admin_dashboard":
                 st.success("Show added successfully!")
                 st.rerun()
 
-        # Display Shows List
         for s in shows:
             col_img, col_info, col_act = st.columns([1, 3, 2])
             with col_img:
@@ -204,7 +202,7 @@ elif st.session_state.role == "admin_dashboard":
                     st.rerun()
         conn.close()
 
-    # Tab 2: Manage Users
+    # Tab 2: Manage Users (FIXED - ADDED LIMIT MODIFICATION)
     with tab2:
         st.subheader("Registered Users")
         conn = get_db_connection()
@@ -223,13 +221,25 @@ elif st.session_state.role == "admin_dashboard":
                 
         users = conn.execute("SELECT user_id, name, category, max_limit FROM registered_ids").fetchall()
         for u in users:
-            col_u1, col_u2, col_u3 = st.columns([2, 2, 2])
+            # Re-designed column layout to accommodate limit updating
+            col_u1, col_u2, col_u3, col_u4 = st.columns([2, 1, 2, 1])
             with col_u1:
                 st.write(f"ID: **{u[0]}** | Name: {u[1]}")
+                st.write(f"Tier: {u[2]} | Current Limit: {u[3]}")
             with col_u2:
-                st.write(f"Tier: {u[2]} | Limit: {u[3]}")
+                # Provide an input specifically for modifying this user's limit
+                new_limit = st.number_input("New Limit", min_value=1, value=u[3], key=f"lim_in_{u[0]}")
             with col_u3:
-                if st.button(f"Delete User {u[0]}", key=f"del_usr_{u[0]}"):
+                # Button to execute limit change
+                if st.button("Update Limit", key=f"upd_lim_{u[0]}"):
+                    conn = get_db_connection()
+                    conn.execute("UPDATE registered_ids SET max_limit=? WHERE user_id=?", (new_limit, u[0]))
+                    conn.commit()
+                    conn.close()
+                    st.toast(f"Limit for {u[0]} updated to {new_limit}!")
+                    st.rerun()
+            with col_u4:
+                if st.button("Delete User", key=f"del_usr_{u[0]}", type="primary"):
                     conn.execute("DELETE FROM registered_ids WHERE user_id=?", (u[0],))
                     conn.commit()
                     st.rerun()
@@ -307,7 +317,11 @@ elif st.session_state.role == "user_login":
 
 # USER DASHBOARD
 elif st.session_state.role == "user_dashboard":
-    user = st.session_state.user_data
+    # Refresh user data to grab any admin-modified max_limit
+    conn = get_db_connection()
+    user = conn.execute("SELECT user_id, name, category, password, max_limit FROM registered_ids WHERE user_id=?", (st.session_state.user_data[0],)).fetchone()
+    conn.close()
+    
     st.title(f"Welcome, {user[1]}!")
     st.markdown(f"Access Tier: **{user[2]}** | Account ID: `{user[0]}`")
     
@@ -340,7 +354,7 @@ elif st.session_state.role == "user_dashboard":
                             st.session_state.current_page = ("book", s[0], s[1])
                             st.rerun()
         else:
-            # Interactive Seat Booking System Screen
+            # Interactive Seat Booking System Screen (FIXED - WRAPPED IN A FORM)
             page_type, show_id, show_title = st.session_state.current_page
             st.subheader(f"Booking Map: {show_title}")
             
@@ -352,52 +366,60 @@ elif st.session_state.role == "user_dashboard":
             remaining_quota = user[4] - user_booked_count
             st.info(f"Your Tier Quota remaining: {remaining_quota} seats (Max allowance: {user[4]})")
             
-            st.markdown("<div style='background-color:black;color:white;text-align:center;padding:10px;'>SCREEN</div>", unsafe_allowed_value=True)
-            
-            selected_seats = []
-            
-            # Draw the interactive grid matrix matching rows A-J and 1-28 columns
-            for row in ROWS:
-                # Classify category dynamically
-                cat = 'Gold' if row == 'J' else ('Silver' if row in ['G','H','I'] else 'Standard')
-                is_disabled = (cat != user[2])
+            # Wrap the entire seat selection in an st.form to stop page reloads on every click
+            with st.form(key=f"seat_booking_form_{show_id}"):
+                st.markdown("<div style='background-color:black;color:white;text-align:center;padding:10px;'>SCREEN</div><br>", unsafe_allowed_value=True)
                 
-                cols = st.columns(30)
-                cols[0].write(f"**{row}**")
+                selected_seats = []
                 
-                for c in range(1, 29):
-                    seat_id = f"{row}{c}"
-                    col_index = c if c <= 14 else c + 1  # creates an aisle gap after column 14
+                # Draw the interactive grid matrix matching rows A-J and 1-28 columns
+                for row in ROWS:
+                    cat = 'Gold' if row == 'J' else ('Silver' if row in ['G','H','I'] else 'Standard')
+                    is_disabled = (cat != user[2])
                     
-                    if seat_id in booked:
-                        cols[col_index].markdown("🔴")
-                    elif is_disabled:
-                        cols[col_index].markdown("⚪")
+                    cols = st.columns(30)
+                    cols[0].write(f"**{row}**")
+                    
+                    for c in range(1, 29):
+                        seat_id = f"{row}{c}"
+                        col_index = c if c <= 14 else c + 1  
+                        
+                        with cols[col_index]:
+                            if seat_id in booked:
+                                st.markdown("🔴") # Booked
+                            elif is_disabled:
+                                st.markdown("⚪") # Not allowed for tier
+                            else:
+                                # Render Checkbox. State is captured on form submission.
+                                if st.checkbox(f"{c}", key=f"chk_{seat_id}", label_visibility="collapsed"):
+                                    selected_seats.append(seat_id)
+                                
+                    cols[29].write(f"**{row}**")
+                    
+                st.write("")
+                
+                # The form submit button processes all the checkboxes at once
+                submitted = st.form_submit_button("Confirm & Pay Booking", type="primary")
+                
+                if submitted:
+                    if not selected_seats:
+                        st.error("No seats selected.")
+                    elif len(selected_seats) > remaining_quota:
+                        st.error(f"You selected {len(selected_seats)} seats, but your remaining tier quota is only {remaining_quota}.")
                     else:
-                        if cols[col_index].checkbox(f"{c}", key=f"chk_{seat_id}", label_visibility="collapsed"):
-                            selected_seats.append(seat_id)
-                            
-                cols[29].write(f"**{row}**")
-                
-            st.write("")
-            if st.button("Confirm & Pay Booking", type="primary"):
-                if not selected_seats:
-                    st.error("No seats selected.")
-                elif len(selected_seats) > remaining_quota:
-                    st.error(f"You selected {len(selected_seats)} seats, but your remaining tier quota is only {remaining_quota}.")
-                else:
-                    # Save Bookings
-                    conn = get_db_connection()
-                    booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-                    for seat in selected_seats:
-                        conn.execute("INSERT INTO booked_seats (show_id, seat_num, user_id, booking_ref) VALUES (?, ?, ?, ?)",
-                                     (show_id, seat, user[0], booking_ref))
-                    conn.commit()
-                    conn.close()
-                    st.success("Booking saved successfully! Check the 'Tickets & Receipts' tab to fetch your receipt.")
-                    st.session_state.current_page = None
-                    st.rerun()
-                    
+                        # Save Bookings
+                        conn = get_db_connection()
+                        booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                        for seat in selected_seats:
+                            conn.execute("INSERT INTO booked_seats (show_id, seat_num, user_id, booking_ref) VALUES (?, ?, ?, ?)",
+                                         (show_id, seat, user[0], booking_ref))
+                        conn.commit()
+                        conn.close()
+                        st.success("Booking saved successfully! Check the 'Tickets & Receipts' tab to fetch your receipt.")
+                        st.session_state.current_page = None
+                        st.rerun()
+                        
+            # Outside the form (Cancel button)
             if st.button("Cancel & Go Back"):
                 st.session_state.current_page = None
                 st.rerun()
@@ -417,7 +439,6 @@ elif st.session_state.role == "user_dashboard":
             st.write(f"🎬 Movie: {mb[1]} | ⏰ {mb[2]} at {mb[3]}")
             st.write(f"🎟️ Seats: {mb[4]}")
             
-            # Dynamically produce and download PDFs natively inside Streamlit UI
             seats_arr = mb[4].split(", ")
             cost = len(seats_arr) * PRICES.get(user[2], 10)
             full_title_str = f"{mb[1]} ({mb[2]} {mb[3]})"
