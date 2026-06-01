@@ -202,7 +202,7 @@ elif st.session_state.role == "admin_dashboard":
                     st.rerun()
         conn.close()
 
-    # Tab 2: Manage Users (FIXED - ADDED LIMIT MODIFICATION)
+    # Tab 2: Manage Users
     with tab2:
         st.subheader("Registered Users")
         conn = get_db_connection()
@@ -221,16 +221,13 @@ elif st.session_state.role == "admin_dashboard":
                 
         users = conn.execute("SELECT user_id, name, category, max_limit FROM registered_ids").fetchall()
         for u in users:
-            # Re-designed column layout to accommodate limit updating
             col_u1, col_u2, col_u3, col_u4 = st.columns([2, 1, 2, 1])
             with col_u1:
                 st.write(f"ID: **{u[0]}** | Name: {u[1]}")
                 st.write(f"Tier: {u[2]} | Current Limit: {u[3]}")
             with col_u2:
-                # Provide an input specifically for modifying this user's limit
                 new_limit = st.number_input("New Limit", min_value=1, value=u[3], key=f"lim_in_{u[0]}")
             with col_u3:
-                # Button to execute limit change
                 if st.button("Update Limit", key=f"upd_lim_{u[0]}"):
                     conn = get_db_connection()
                     conn.execute("UPDATE registered_ids SET max_limit=? WHERE user_id=?", (new_limit, u[0]))
@@ -354,7 +351,7 @@ elif st.session_state.role == "user_dashboard":
                             st.session_state.current_page = ("book", s[0], s[1])
                             st.rerun()
         else:
-            # Interactive Seat Booking System Screen (FIXED - WRAPPED IN A FORM)
+            # Interactive Seat Booking System Screen 
             page_type, show_id, show_title = st.session_state.current_page
             st.subheader(f"Booking Map: {show_title}")
             
@@ -368,7 +365,9 @@ elif st.session_state.role == "user_dashboard":
             
             # Wrap the entire seat selection in an st.form to stop page reloads on every click
             with st.form(key=f"seat_booking_form_{show_id}"):
-                st.markdown("<div style='background-color:black;color:white;text-align:center;padding:10px;'>SCREEN</div><br>", unsafe_allowed_value=True)
+                
+                # FIXED TYPO HERE
+                st.markdown("<div style='background-color:black;color:white;text-align:center;padding:10px;'>SCREEN</div><br>", unsafe_allow_html=True)
                 
                 selected_seats = []
                 
