@@ -99,6 +99,69 @@ def generate_receipt_pdf(ref_code, user_name, user_id, user_category, show_title
         
     return pdf_path
 
+def generate_users_pdf():
+    conn = get_db_connection()
+    users = conn.execute("SELECT user_id, name, category, max_limit FROM registered_ids").fetchall()
+    conn.close()
+    
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, txt="CINEMA REGISTERED USERS", ln=True, align='C')
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(30, 10, "User ID", 1)
+    pdf.cell(70, 10, "Full Name", 1)
+    pdf.cell(40, 10, "Access Tier", 1)
+    pdf.cell(30, 10, "Seat Limit", 1, ln=True)
+    
+    pdf.set_font("Arial", '', 10)
+    for u in users:
+        pdf.cell(30, 10, str(u[0]), 1)
+        pdf.cell(70, 10, str(u[1])[:30], 1)
+        pdf.cell(40, 10, str(u[2]), 1)
+        pdf.cell(30, 10, str(u[3]), 1, ln=True)
+        
+    os.makedirs("temp", exist_ok=True)
+    pdf_path = os.path.join("temp", "Cinema_Users.pdf")
+    pdf.output(pdf_path)
+    return pdf_path
+
+def generate_manifest_pdf(show_id, show_title, show_date):
+    conn = get_db_connection()
+    query = '''SELECT b.booking_ref, b.seat_num, r.name, b.user_id
+               FROM booked_seats b JOIN registered_ids r ON b.user_id = r.user_id
+               WHERE b.show_id = ? ORDER BY b.booking_ref, b.seat_num'''
+    bookings = conn.execute(query, (show_id,)).fetchall()
+    conn.close()
+    
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, txt="CINEMA DOOR VERIFICATION MANIFEST", ln=True, align='C')
+    pdf.set_font("Arial", 'I', 12)
+    pdf.cell(200, 10, txt=f"Show: {show_title} ({show_date})", ln=True, align='C')
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(30, 10, "Ref Code", 1)
+    pdf.cell(20, 10, "Seat", 1)
+    pdf.cell(80, 10, "Customer Name", 1)
+    pdf.cell(30, 10, "User ID", 1, ln=True)
+    
+    pdf.set_font("Arial", '', 10)
+    for b in bookings:
+        pdf.cell(30, 10, str(b[0]), 1)
+        pdf.cell(20, 10, str(b[1]), 1)
+        pdf.cell(80, 10, str(b[2])[:30], 1)
+        pdf.cell(30, 10, str(b[3]), 1, ln=True)
+        
+    os.makedirs("temp", exist_ok=True)
+    pdf_path = os.path.join("temp", f"Manifest_Show_{show_id}.pdf")
+    pdf.output(pdf_path)
+    return pdf_path
+
+
 # ==========================================
 # 3. SESSION MANAGEMENT & NAVIGATION
 # ==========================================
@@ -202,11 +265,18 @@ elif st.session_state.role == "admin_dashboard":
                     st.rerun()
         conn.close()
 
-    # Tab 2: Manage Users
+    # Tab 2: Manage Users (UPDATED: Added Search Bar & PDF Export)
     with tab2:
         st.subheader("Registered Users")
         conn = get_db_connection()
         
+        # Action Buttons row
+        col_btn1, col_btn2 = st.columns([1, 3])
+        with col_btn1:
+            users_pdf_path = generate_users_pdf()
+            with open(users_pdf_path, "rb") as f:
+                st.download_button("📥 Export Users PDF", f, file_name="Cinema_Users.pdf", mime="application/pdf")
+                
         with st.expander("+ Generate New User"):
             u_name = st.text_input("Full Name")
             u_cat = st.selectbox("Access Tier", ["Standard", "Silver", "Gold"])
@@ -219,7 +289,16 @@ elif st.session_state.role == "admin_dashboard":
                 st.success(f"Generated User ID: {new_id} | Temp Pass: 1234")
                 st.rerun()
                 
-        users = conn.execute("SELECT user_id, name, category, max_limit FROM registered_ids").fetchall()
+        # SEARCH BAR
+        st.markdown("---")
+        search_query = st.text_input("🔍 Search User by Name or ID", "")
+        
+        if search_query:
+            query = "SELECT user_id, name, category, max_limit FROM registered_ids WHERE name LIKE ? OR user_id LIKE ?"
+            users = conn.execute(query, (f"%{search_query}%", f"%{search_query}%")).fetchall()
+        else:
+            users = conn.execute("SELECT user_id, name, category, max_limit FROM registered_ids").fetchall()
+            
         for u in users:
             col_u1, col_u2, col_u3, col_u4 = st.columns([2, 1, 2, 1])
             with col_u1:
@@ -242,13 +321,24 @@ elif st.session_state.role == "admin_dashboard":
                     st.rerun()
         conn.close()
 
-    # Tab 3: Door Manifest & Bookings
+    # Tab 3: Door Manifest & Bookings (UPDATED: Added Manifest PDF Export)
     with tab3:
         st.subheader("Door Verification Manifest")
         conn = get_db_connection()
-        shows_list = conn.execute("SELECT id, title FROM shows").fetchall()
+        shows_list = conn.execute("SELECT id, title, show_date FROM shows").fetchall()
         show_options = {s[1]: s[0] for s in shows_list}
         selected_show_name = st.selectbox("Filter by Show", ["-- All Shows --"] + list(show_options.keys()))
+        
+        # If a specific show is selected, allow Admin to download the door manifest
+        if selected_show_name != "-- All Shows --":
+            show_id = show_options[selected_show_name]
+            show_info = [s for s in shows_list if s[0] == show_id][0]
+            manifest_pdf_path = generate_manifest_pdf(show_id, show_info[1], show_info[2])
+            
+            with open(manifest_pdf_path, "rb") as f:
+                st.download_button("📥 Download Door Manifest (PDF)", f, file_name=f"Manifest_Show_{show_id}.pdf", mime="application/pdf")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
         
         query = '''SELECT b.booking_ref, s.title, b.seat_num, b.user_id, r.name, b.show_id
                    FROM booked_seats b 
@@ -314,7 +404,6 @@ elif st.session_state.role == "user_login":
 
 # USER DASHBOARD
 elif st.session_state.role == "user_dashboard":
-    # Refresh user data to grab any admin-modified max_limit
     conn = get_db_connection()
     user = conn.execute("SELECT user_id, name, category, password, max_limit FROM registered_ids WHERE user_id=?", (st.session_state.user_data[0],)).fetchone()
     conn.close()
@@ -351,7 +440,7 @@ elif st.session_state.role == "user_dashboard":
                             st.session_state.current_page = ("book", s[0], s[1])
                             st.rerun()
         else:
-            # Interactive Seat Booking System Screen 
+            # Interactive Seat Booking System Screen
             page_type, show_id, show_title = st.session_state.current_page
             st.subheader(f"Booking Map: {show_title}")
             
@@ -363,15 +452,12 @@ elif st.session_state.role == "user_dashboard":
             remaining_quota = user[4] - user_booked_count
             st.info(f"Your Tier Quota remaining: {remaining_quota} seats (Max allowance: {user[4]})")
             
-            # Wrap the entire seat selection in an st.form to stop page reloads on every click
             with st.form(key=f"seat_booking_form_{show_id}"):
                 
-                # FIXED TYPO HERE
                 st.markdown("<div style='background-color:black;color:white;text-align:center;padding:10px;'>SCREEN</div><br>", unsafe_allow_html=True)
                 
                 selected_seats = []
                 
-                # Draw the interactive grid matrix matching rows A-J and 1-28 columns
                 for row in ROWS:
                     cat = 'Gold' if row == 'J' else ('Silver' if row in ['G','H','I'] else 'Standard')
                     is_disabled = (cat != user[2])
@@ -385,11 +471,10 @@ elif st.session_state.role == "user_dashboard":
                         
                         with cols[col_index]:
                             if seat_id in booked:
-                                st.markdown("🔴") # Booked
+                                st.markdown("🔴") 
                             elif is_disabled:
-                                st.markdown("⚪") # Not allowed for tier
+                                st.markdown("⚪") 
                             else:
-                                # Render Checkbox. State is captured on form submission.
                                 if st.checkbox(f"{c}", key=f"chk_{seat_id}", label_visibility="collapsed"):
                                     selected_seats.append(seat_id)
                                 
@@ -397,7 +482,6 @@ elif st.session_state.role == "user_dashboard":
                     
                 st.write("")
                 
-                # The form submit button processes all the checkboxes at once
                 submitted = st.form_submit_button("Confirm & Pay Booking", type="primary")
                 
                 if submitted:
@@ -406,7 +490,6 @@ elif st.session_state.role == "user_dashboard":
                     elif len(selected_seats) > remaining_quota:
                         st.error(f"You selected {len(selected_seats)} seats, but your remaining tier quota is only {remaining_quota}.")
                     else:
-                        # Save Bookings
                         conn = get_db_connection()
                         booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
                         for seat in selected_seats:
@@ -418,7 +501,6 @@ elif st.session_state.role == "user_dashboard":
                         st.session_state.current_page = None
                         st.rerun()
                         
-            # Outside the form (Cancel button)
             if st.button("Cancel & Go Back"):
                 st.session_state.current_page = None
                 st.rerun()
