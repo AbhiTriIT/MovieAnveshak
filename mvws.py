@@ -19,7 +19,8 @@ ROWS = "ABCDEFGHIJ"
 # ==========================================
 def run_query(query, params=None, fetch=None, execute_many=False):
     """Helper function to cleanly execute database queries."""
-    conn = psycopg2.connect(st.secrets["postgresql://postgres:Fqvt3Gm0qFaznyy7@db.erksbxrcjmptghmyzuhf.supabase.co:5432/postgres"])
+    # CORRECT
+conn = psycopg2.connect(st.secrets["DATABASE_URL"])
     conn.autocommit = True
     cursor = conn.cursor()
     
