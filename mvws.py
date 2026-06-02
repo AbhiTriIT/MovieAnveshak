@@ -72,20 +72,7 @@ def init_db():
         run_query("INSERT INTO shows (title, show_date, show_time, description, image_path) VALUES (%s, %s, %s, %s, %s)", default_shows, execute_many=True)
 
 # Initialize the database on startup
-# init_db()
-# init_db()  <-- Comment this out so the app doesn't crash
-
-# Add this test instead:
-st.write("Checking Secrets...")
-try:
-    test_url = st.secrets["DATABASE_URL"]
-    st.success(f"Secret found! Total characters: {len(test_url)}")
-    if "@aws" in test_url:
-        st.info("The pooler address looks correct.")
-    else:
-        st.error("The pooler address is missing or wrong.")
-except Exception as e:
-    st.error("Streamlit cannot find the secret at all.")
+init_db()
 
 # ==========================================
 # 2. PDF & QR UTILITIES
