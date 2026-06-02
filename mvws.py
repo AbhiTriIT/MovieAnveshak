@@ -9,7 +9,7 @@ import qrcode
 from PIL import Image
 
 # --- Page Setup & CSS Injection ---
-st.set_page_config(page_title="Cinemagic Booking Portal", page_icon="🍿", layout="wide")
+st.set_page_config(page_title="Anveshak Ticket Booking Portal", page_icon="🍿", layout="wide")
 
 def load_custom_css():
     st.markdown("""
