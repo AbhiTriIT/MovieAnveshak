@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import psycopg2
 import random
 import string
 import datetime
@@ -11,47 +11,66 @@ from PIL import Image
 # --- Page Setup ---
 st.set_page_config(page_title="Python Cinema Booking System", layout="wide")
 
-DB_PATH = "cinema.db"
 PRICES = {"Gold": 20.0, "Silver": 15.0, "Standard": 10.0}
 ROWS = "ABCDEFGHIJ"
 
-def get_db_connection():
-    return sqlite3.connect(DB_PATH)
-
 # ==========================================
-# 1. DATABASE INITIALIZATION
+# 1. DATABASE UTILITIES (PostgreSQL via Supabase)
 # ==========================================
-def init_db():
-    conn = get_db_connection()
+def run_query(query, params=None, fetch=None, execute_many=False):
+    """Helper function to cleanly execute database queries."""
+    conn = psycopg2.connect(st.secrets["DATABASE_URL"])
+    conn.autocommit = True
     cursor = conn.cursor()
     
-    cursor.execute('''CREATE TABLE IF NOT EXISTS admin_settings (key TEXT PRIMARY KEY, value TEXT)''')
-    cursor.execute('SELECT COUNT(*) FROM admin_settings WHERE key="password"')
-    if cursor.fetchone()[0] == 0:
-        cursor.execute('INSERT INTO admin_settings (key, value) VALUES ("password", "admin123")')
+    try:
+        if execute_many and params:
+            cursor.executemany(query, params)
+        elif params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+            
+        result = None
+        if fetch == "one":
+            result = cursor.fetchone()
+        elif fetch == "all":
+            result = cursor.fetchall()
+            
+        return result
+    finally:
+        cursor.close()
+        conn.close()
 
-    cursor.execute('''CREATE TABLE IF NOT EXISTS shows 
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, show_date TEXT, 
-                       show_time TEXT, description TEXT, image_path TEXT)''')
+def init_db():
+    run_query('''CREATE TABLE IF NOT EXISTS admin_settings (key TEXT PRIMARY KEY, value TEXT)''')
     
-    cursor.execute('''CREATE TABLE IF NOT EXISTS registered_ids 
-                      (user_id TEXT PRIMARY KEY, name TEXT, category TEXT, password TEXT, max_limit INTEGER)''')
+    count_admin = run_query("SELECT COUNT(*) FROM admin_settings WHERE key='password'", fetch="one")[0]
+    if count_admin == 0:
+        run_query("INSERT INTO admin_settings (key, value) VALUES ('password', 'admin123')")
+
+    # Changed AUTOINCREMENT to SERIAL for PostgreSQL
+    run_query('''CREATE TABLE IF NOT EXISTS shows 
+                 (id SERIAL PRIMARY KEY, title TEXT, show_date TEXT, 
+                  show_time TEXT, description TEXT, image_path TEXT)''')
+    
+    run_query('''CREATE TABLE IF NOT EXISTS registered_ids 
+                 (user_id TEXT PRIMARY KEY, name TEXT, category TEXT, password TEXT, max_limit INTEGER)''')
                       
-    cursor.execute('''CREATE TABLE IF NOT EXISTS booked_seats 
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT, show_id INTEGER, seat_num TEXT, user_id TEXT, booking_ref TEXT)''')
+    run_query('''CREATE TABLE IF NOT EXISTS booked_seats 
+                 (id SERIAL PRIMARY KEY, show_id INTEGER, seat_num TEXT, user_id TEXT, booking_ref TEXT)''')
     
-    cursor.execute('SELECT COUNT(*) FROM shows')
-    if cursor.fetchone()[0] == 0:
+    count_shows = run_query("SELECT COUNT(*) FROM shows", fetch="one")[0]
+    if count_shows == 0:
         default_shows = [
             ('Inception', '2026-11-20', '18:00', 'A thief who steals corporate secrets through the use of dream-sharing technology...', ''),
             ('The Matrix', '2026-11-20', '21:00', 'When a beautiful stranger leads computer hacker Neo to a forbidding underworld...', ''),
             ('Interstellar', '2026-11-21', '19:30', 'A team of explorers travel through a wormhole in space in an attempt to ensure humanity\'s survival.', '')
         ]
-        cursor.executemany('INSERT INTO shows (title, show_date, show_time, description, image_path) VALUES (?, ?, ?, ?, ?)', default_shows)
-    
-    conn.commit()
-    conn.close()
+        # Changed ? to %s for PostgreSQL
+        run_query("INSERT INTO shows (title, show_date, show_time, description, image_path) VALUES (%s, %s, %s, %s, %s)", default_shows, execute_many=True)
 
+# Initialize the database on startup
 init_db()
 
 # ==========================================
@@ -100,9 +119,7 @@ def generate_receipt_pdf(ref_code, user_name, user_id, user_category, show_title
     return pdf_path
 
 def generate_users_pdf():
-    conn = get_db_connection()
-    users = conn.execute("SELECT user_id, name, category, max_limit FROM registered_ids").fetchall()
-    conn.close()
+    users = run_query("SELECT user_id, name, category, max_limit FROM registered_ids", fetch="all")
     
     pdf = FPDF()
     pdf.add_page()
@@ -128,12 +145,10 @@ def generate_users_pdf():
     return pdf_path
 
 def generate_manifest_pdf(show_id, show_title, show_date):
-    conn = get_db_connection()
     query = '''SELECT b.booking_ref, b.seat_num, r.name, b.user_id
                FROM booked_seats b JOIN registered_ids r ON b.user_id = r.user_id
-               WHERE b.show_id = ? ORDER BY b.booking_ref, b.seat_num'''
-    bookings = conn.execute(query, (show_id,)).fetchall()
-    conn.close()
+               WHERE b.show_id = %s ORDER BY b.booking_ref, b.seat_num'''
+    bookings = run_query(query, (show_id,), fetch="all")
     
     pdf = FPDF()
     pdf.add_page()
@@ -201,9 +216,7 @@ elif st.session_state.role == "admin_login":
     st.subheader("⚙️ Admin Login")
     password = st.text_input("Password", type="password")
     if st.button("Login", type="primary"):
-        conn = get_db_connection()
-        real_pwd = conn.execute("SELECT value FROM admin_settings WHERE key='password'").fetchone()[0]
-        conn.close()
+        real_pwd = run_query("SELECT value FROM admin_settings WHERE key='password'", fetch="one")[0]
         if password == real_pwd:
             st.session_state.role = "admin_dashboard"
             st.rerun()
@@ -224,8 +237,7 @@ elif st.session_state.role == "admin_dashboard":
     # Tab 1: Manage Shows
     with tab1:
         st.subheader("Current Shows")
-        conn = get_db_connection()
-        shows = conn.execute("SELECT * FROM shows").fetchall()
+        shows = run_query("SELECT * FROM shows ORDER BY id", fetch="all")
         
         with st.expander("+ Add New Show"):
             new_title = st.text_input("Movie Title")
@@ -241,9 +253,9 @@ elif st.session_state.role == "admin_dashboard":
                     img_name = new_poster.name
                     with open(os.path.join("static", "uploads", img_name), "wb") as f:
                         f.write(new_poster.getbuffer())
-                conn.execute("INSERT INTO shows (title, show_date, show_time, description, image_path) VALUES (?, ?, ?, ?, ?)",
-                             (new_title, new_date, new_time, new_desc, img_name))
-                conn.commit()
+                
+                run_query("INSERT INTO shows (title, show_date, show_time, description, image_path) VALUES (%s, %s, %s, %s, %s)",
+                          (new_title, new_date, new_time, new_desc, img_name))
                 st.success("Show added successfully!")
                 st.rerun()
 
@@ -259,18 +271,14 @@ elif st.session_state.role == "admin_dashboard":
                 st.caption(s[4])
             with col_act:
                 if st.button(f"Delete Show {s[0]}", key=f"del_show_{s[0]}"):
-                    conn.execute("DELETE FROM shows WHERE id=?", (s[0],))
-                    conn.execute("DELETE FROM booked_seats WHERE show_id=?", (s[0],))
-                    conn.commit()
+                    run_query("DELETE FROM shows WHERE id=%s", (s[0],))
+                    run_query("DELETE FROM booked_seats WHERE show_id=%s", (s[0],))
                     st.rerun()
-        conn.close()
 
-    # Tab 2: Manage Users (UPDATED: Added Search Bar & PDF Export)
+    # Tab 2: Manage Users
     with tab2:
         st.subheader("Registered Users")
-        conn = get_db_connection()
         
-        # Action Buttons row
         col_btn1, col_btn2 = st.columns([1, 3])
         with col_btn1:
             users_pdf_path = generate_users_pdf()
@@ -283,21 +291,20 @@ elif st.session_state.role == "admin_dashboard":
             u_lim = st.number_input("Max Booking Limit", min_value=1, value=4)
             if st.button("Generate User ID"):
                 new_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-                conn.execute("INSERT INTO registered_ids (user_id, name, category, password, max_limit) VALUES (?, ?, ?, ?, ?)",
-                             (new_id, u_name, u_cat, "1234", u_lim))
-                conn.commit()
+                run_query("INSERT INTO registered_ids (user_id, name, category, password, max_limit) VALUES (%s, %s, %s, %s, %s)",
+                          (new_id, u_name, u_cat, "1234", u_lim))
                 st.success(f"Generated User ID: {new_id} | Temp Pass: 1234")
                 st.rerun()
                 
-        # SEARCH BAR
         st.markdown("---")
         search_query = st.text_input("🔍 Search User by Name or ID", "")
         
         if search_query:
-            query = "SELECT user_id, name, category, max_limit FROM registered_ids WHERE name LIKE ? OR user_id LIKE ?"
-            users = conn.execute(query, (f"%{search_query}%", f"%{search_query}%")).fetchall()
+            query = "SELECT user_id, name, category, max_limit FROM registered_ids WHERE name ILIKE %s OR user_id ILIKE %s"
+            search_param = f"%{search_query}%"
+            users = run_query(query, (search_param, search_param), fetch="all")
         else:
-            users = conn.execute("SELECT user_id, name, category, max_limit FROM registered_ids").fetchall()
+            users = run_query("SELECT user_id, name, category, max_limit FROM registered_ids", fetch="all")
             
         for u in users:
             col_u1, col_u2, col_u3, col_u4 = st.columns([2, 1, 2, 1])
@@ -308,28 +315,21 @@ elif st.session_state.role == "admin_dashboard":
                 new_limit = st.number_input("New Limit", min_value=1, value=u[3], key=f"lim_in_{u[0]}")
             with col_u3:
                 if st.button("Update Limit", key=f"upd_lim_{u[0]}"):
-                    conn = get_db_connection()
-                    conn.execute("UPDATE registered_ids SET max_limit=? WHERE user_id=?", (new_limit, u[0]))
-                    conn.commit()
-                    conn.close()
+                    run_query("UPDATE registered_ids SET max_limit=%s WHERE user_id=%s", (new_limit, u[0]))
                     st.toast(f"Limit for {u[0]} updated to {new_limit}!")
                     st.rerun()
             with col_u4:
                 if st.button("Delete User", key=f"del_usr_{u[0]}", type="primary"):
-                    conn.execute("DELETE FROM registered_ids WHERE user_id=?", (u[0],))
-                    conn.commit()
+                    run_query("DELETE FROM registered_ids WHERE user_id=%s", (u[0],))
                     st.rerun()
-        conn.close()
 
-    # Tab 3: Door Manifest & Bookings (UPDATED: Added Manifest PDF Export)
+    # Tab 3: Door Manifest & Bookings
     with tab3:
         st.subheader("Door Verification Manifest")
-        conn = get_db_connection()
-        shows_list = conn.execute("SELECT id, title, show_date FROM shows").fetchall()
+        shows_list = run_query("SELECT id, title, show_date FROM shows", fetch="all")
         show_options = {s[1]: s[0] for s in shows_list}
         selected_show_name = st.selectbox("Filter by Show", ["-- All Shows --"] + list(show_options.keys()))
         
-        # If a specific show is selected, allow Admin to download the door manifest
         if selected_show_name != "-- All Shows --":
             show_id = show_options[selected_show_name]
             show_info = [s for s in shows_list if s[0] == show_id][0]
@@ -345,10 +345,13 @@ elif st.session_state.role == "admin_dashboard":
                    JOIN shows s ON b.show_id = s.id 
                    JOIN registered_ids r ON b.user_id = r.user_id'''
         
+        params = None
         if selected_show_name != "-- All Shows --":
-            query += f" WHERE b.show_id = {show_options[selected_show_name]}"
+            query += " WHERE b.show_id = %s"
+            params = (show_options[selected_show_name],)
             
-        bookings = conn.execute(query).fetchall()
+        bookings = run_query(query, params, fetch="all")
+        
         for b in bookings:
             col_b1, col_b2, col_b3 = st.columns([2, 2, 2])
             with col_b1:
@@ -360,14 +363,11 @@ elif st.session_state.role == "admin_dashboard":
                 new_seat = st.text_input("Move Seat", key=f"move_txt_{b[0]}_{b[2]}", max_chars=4).upper()
                 if st.button("Change", key=f"move_btn_{b[0]}_{b[2]}"):
                     if new_seat:
-                        conn.execute("UPDATE booked_seats SET seat_num=? WHERE booking_ref=? AND seat_num=?", (new_seat, b[0], b[2]))
-                        conn.commit()
+                        run_query("UPDATE booked_seats SET seat_num=%s WHERE booking_ref=%s AND seat_num=%s", (new_seat, b[0], b[2]))
                         st.rerun()
                 if st.button("Cancel Seat", key=f"can_btn_{b[0]}_{b[2]}"):
-                    conn.execute("DELETE FROM booked_seats WHERE booking_ref=? AND seat_num=?", (b[0], b[2]))
-                    conn.commit()
+                    run_query("DELETE FROM booked_seats WHERE booking_ref=%s AND seat_num=%s", (b[0], b[2]))
                     st.rerun()
-        conn.close()
 
     # Tab 4: Settings
     with tab4:
@@ -375,10 +375,7 @@ elif st.session_state.role == "admin_dashboard":
         new_admin_p = st.text_input("New Admin Password", type="password")
         if st.button("Update Password"):
             if new_admin_p:
-                conn = get_db_connection()
-                conn.execute("UPDATE admin_settings SET value=? WHERE key='password'", (new_admin_p,))
-                conn.commit()
-                conn.close()
+                run_query("UPDATE admin_settings SET value=%s WHERE key='password'", (new_admin_p,))
                 st.success("Admin password successfully updated.")
 
 # USER LOGIN
@@ -388,9 +385,8 @@ elif st.session_state.role == "user_login":
     u_pass = st.text_input("Password", type="password")
     
     if st.button("Login", type="primary"):
-        conn = get_db_connection()
-        user = conn.execute("SELECT user_id, name, category, password, max_limit FROM registered_ids WHERE user_id=? AND password=?", (u_id, u_pass)).fetchone()
-        conn.close()
+        user = run_query("SELECT user_id, name, category, password, max_limit FROM registered_ids WHERE user_id=%s AND password=%s", 
+                         (u_id, u_pass), fetch="one")
         if user:
             st.session_state.user_data = user
             st.session_state.role = "user_dashboard"
@@ -404,9 +400,8 @@ elif st.session_state.role == "user_login":
 
 # USER DASHBOARD
 elif st.session_state.role == "user_dashboard":
-    conn = get_db_connection()
-    user = conn.execute("SELECT user_id, name, category, password, max_limit FROM registered_ids WHERE user_id=?", (st.session_state.user_data[0],)).fetchone()
-    conn.close()
+    user = run_query("SELECT user_id, name, category, password, max_limit FROM registered_ids WHERE user_id=%s", 
+                     (st.session_state.user_data[0],), fetch="one")
     
     st.title(f"Welcome, {user[1]}!")
     st.markdown(f"Access Tier: **{user[2]}** | Account ID: `{user[0]}`")
@@ -419,9 +414,7 @@ elif st.session_state.role == "user_dashboard":
     # Tab 1: Now Showing / Seat Booking
     with utab1:
         if st.session_state.current_page is None:
-            conn = get_db_connection()
-            shows = conn.execute("SELECT * FROM shows").fetchall()
-            conn.close()
+            shows = run_query("SELECT * FROM shows ORDER BY id", fetch="all")
             
             for s in shows:
                 with st.container():
@@ -440,20 +433,19 @@ elif st.session_state.role == "user_dashboard":
                             st.session_state.current_page = ("book", s[0], s[1])
                             st.rerun()
         else:
-            # Interactive Seat Booking System Screen
             page_type, show_id, show_title = st.session_state.current_page
             st.subheader(f"Booking Map: {show_title}")
             
-            conn = get_db_connection()
-            booked = [r[0] for r in conn.execute("SELECT seat_num FROM booked_seats WHERE show_id=?", (show_id,)).fetchall()]
-            user_booked_count = len(conn.execute("SELECT seat_num FROM booked_seats WHERE show_id=? AND user_id=?", (show_id, user[0])).fetchall())
-            conn.close()
+            booked_records = run_query("SELECT seat_num FROM booked_seats WHERE show_id=%s", (show_id,), fetch="all")
+            booked = [r[0] for r in booked_records]
+            
+            user_booked_records = run_query("SELECT seat_num FROM booked_seats WHERE show_id=%s AND user_id=%s", (show_id, user[0]), fetch="all")
+            user_booked_count = len(user_booked_records)
             
             remaining_quota = user[4] - user_booked_count
             st.info(f"Your Tier Quota remaining: {remaining_quota} seats (Max allowance: {user[4]})")
             
             with st.form(key=f"seat_booking_form_{show_id}"):
-                
                 st.markdown("<div style='background-color:black;color:white;text-align:center;padding:10px;'>SCREEN</div><br>", unsafe_allow_html=True)
                 
                 selected_seats = []
@@ -490,13 +482,10 @@ elif st.session_state.role == "user_dashboard":
                     elif len(selected_seats) > remaining_quota:
                         st.error(f"You selected {len(selected_seats)} seats, but your remaining tier quota is only {remaining_quota}.")
                     else:
-                        conn = get_db_connection()
                         booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-                        for seat in selected_seats:
-                            conn.execute("INSERT INTO booked_seats (show_id, seat_num, user_id, booking_ref) VALUES (?, ?, ?, ?)",
-                                         (show_id, seat, user[0], booking_ref))
-                        conn.commit()
-                        conn.close()
+                        insert_data = [(show_id, seat, user[0], booking_ref) for seat in selected_seats]
+                        run_query("INSERT INTO booked_seats (show_id, seat_num, user_id, booking_ref) VALUES (%s, %s, %s, %s)", insert_data, execute_many=True)
+                        
                         st.success("Booking saved successfully! Check the 'Tickets & Receipts' tab to fetch your receipt.")
                         st.session_state.current_page = None
                         st.rerun()
@@ -508,13 +497,14 @@ elif st.session_state.role == "user_dashboard":
     # Tab 2: Tickets Management
     with utab2:
         st.subheader("My Past Bookings")
-        conn = get_db_connection()
-        query = '''SELECT b.booking_ref, s.title, s.show_date, s.show_time, GROUP_CONCAT(b.seat_num, ', ')
+        query = '''SELECT b.booking_ref, s.title, s.show_date, s.show_time, STRING_AGG(b.seat_num, ', ')
                    FROM booked_seats b JOIN shows s ON b.show_id = s.id
-                   WHERE b.user_id = ? GROUP BY b.booking_ref'''
-        my_books = conn.execute(query, (user[0],)).fetchall()
-        conn.close()
+                   WHERE b.user_id = %s GROUP BY b.booking_ref, s.title, s.show_date, s.show_time'''
+        my_books = run_query(query, (user[0],), fetch="all")
         
+        if not my_books:
+            st.write("No bookings found.")
+            
         for mb in my_books:
             st.markdown(f"**Receipt Reference:** `{mb[0]}`")
             st.write(f"🎬 Movie: {mb[1]} | ⏰ {mb[2]} at {mb[3]}")
@@ -543,8 +533,5 @@ elif st.session_state.role == "user_dashboard":
             if old_p != user[3]:
                 st.error("Incorrect current password.")
             elif new_p:
-                conn = get_db_connection()
-                conn.execute("UPDATE registered_ids SET password=? WHERE user_id=?", (new_p, user[0]))
-                conn.commit()
-                conn.close()
+                run_query("UPDATE registered_ids SET password=%s WHERE user_id=%s", (new_p, user[0]))
                 st.success("Password changed successfully!")
