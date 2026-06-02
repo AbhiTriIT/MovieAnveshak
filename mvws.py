@@ -324,17 +324,27 @@ elif st.session_state.role == "admin_dashboard":
                     run_query("DELETE FROM registered_ids WHERE user_id=%s", (u[0],))
                     st.rerun()
 
-    # Tab 3: Door Manifest & Bookings
+   
+   # Tab 3: Door Manifest & Bookings
     with tab3:
         st.subheader("Door Verification Manifest")
-        shows_list = run_query("SELECT id, title, show_date FROM shows", fetch="all")
-        show_options = {s[1]: s[0] for s in shows_list}
+        
+        # 1. Added show_time (s[3]) to the database query
+        shows_list = run_query("SELECT id, title, show_date, show_time FROM shows ORDER BY show_date, show_time", fetch="all")
+        
+        # 2. Formatted the dropdown options to show "Title (YYYY-MM-DD @ HH:MM)"
+        show_options = {f"{s[1]} ({s[2]} @ {s[3]})": s[0] for s in shows_list}
+        
         selected_show_name = st.selectbox("Filter by Show", ["-- All Shows --"] + list(show_options.keys()))
         
         if selected_show_name != "-- All Shows --":
             show_id = show_options[selected_show_name]
+            # Find the specific show info based on the selected ID
             show_info = [s for s in shows_list if s[0] == show_id][0]
-            manifest_pdf_path = generate_manifest_pdf(show_id, show_info[1], show_info[2])
+            
+            # 3. Combine date and time for the PDF Header
+            date_time_str = f"{show_info[2]} at {show_info[3]}"
+            manifest_pdf_path = generate_manifest_pdf(show_id, show_info[1], date_time_str)
             
             with open(manifest_pdf_path, "rb") as f:
                 st.download_button("📥 Download Door Manifest (PDF)", f, file_name=f"Manifest_Show_{show_id}.pdf", mime="application/pdf")
