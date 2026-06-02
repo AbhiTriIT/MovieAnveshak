@@ -236,6 +236,7 @@ elif st.session_state.role == "admin_dashboard":
     tab1, tab2, tab3, tab4 = st.tabs(["Manage Shows", "Manage Users", "Door Manifest & Bookings", "Settings"])
     
     # Tab 1: Manage Shows
+   # Tab 1: Manage Shows
     with tab1:
         st.subheader("Current Shows")
         shows = run_query("SELECT * FROM shows ORDER BY id", fetch="all")
@@ -261,21 +262,47 @@ elif st.session_state.role == "admin_dashboard":
                 st.rerun()
 
         for s in shows:
-            col_img, col_info, col_act = st.columns([1, 3, 2])
+            col_img, col_info, col_act = st.columns([1, 2, 3])
+            
             with col_img:
                 if s[5] and os.path.exists(os.path.join("static", "uploads", s[5])):
-                    st.image(os.path.join("static", "uploads", s[5]), width=80)
+                    st.image(os.path.join("static", "uploads", s[5]), width=100)
                 else:
                     st.write("No Poster")
+                    
             with col_info:
                 st.markdown(f"**{s[1]}** — {s[2]} at {s[3]}")
                 st.caption(s[4])
+                
             with col_act:
-                if st.button(f"Delete Show {s[0]}", key=f"del_show_{s[0]}"):
+                # --- NEW EDIT FEATURE ---
+                with st.expander(f"✏️ Edit Show Details"):
+                    edit_desc = st.text_area("Update Description", value=s[4], key=f"edit_desc_{s[0]}")
+                    edit_poster = st.file_uploader("Update Poster (Leave blank to keep current)", type=["png", "jpg", "jpeg"], key=f"edit_poster_{s[0]}")
+                    
+                    if st.button("💾 Save Changes", key=f"save_edit_{s[0]}", type="primary"):
+                        if edit_poster:
+                            # Save the new image
+                            os.makedirs(os.path.join("static", "uploads"), exist_ok=True)
+                            new_img_name = f"updated_{s[0]}_{edit_poster.name}"
+                            with open(os.path.join("static", "uploads", new_img_name), "wb") as f:
+                                f.write(edit_poster.getbuffer())
+                            
+                            # Update DB with new description AND new image
+                            run_query("UPDATE shows SET description=%s, image_path=%s WHERE id=%s", (edit_desc, new_img_name, s[0]))
+                        else:
+                            # Update DB with ONLY the new description (keeps old image)
+                            run_query("UPDATE shows SET description=%s WHERE id=%s", (edit_desc, s[0]))
+                            
+                        st.toast(f"Show '{s[1]}' updated successfully!")
+                        st.rerun()
+
+                # Existing Delete Button
+                if st.button(f"🗑️ Delete Show", key=f"del_show_{s[0]}"):
                     run_query("DELETE FROM shows WHERE id=%s", (s[0],))
                     run_query("DELETE FROM booked_seats WHERE show_id=%s", (s[0],))
                     st.rerun()
-
+            st.markdown("---")
     # Tab 2: Manage Users
     with tab2:
         st.subheader("Registered Users")
