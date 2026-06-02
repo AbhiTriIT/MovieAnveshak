@@ -457,8 +457,9 @@ elif st.session_state.role == "user_dashboard":
         
     utab1, utab2, utab3 = st.tabs(["Now Showing", "My Tickets & Receipts", "Account Settings"])
     
-    # Tab 1: Now Showing / Seat Booking
+   # Tab 1: Now Showing / Seat Booking
     with utab1:
+        # --- THE 'IF' BLOCK: Showing the movie list ---
         if st.session_state.current_page is None:
             shows = run_query("SELECT * FROM shows ORDER BY id", fetch="all")
             
@@ -476,13 +477,81 @@ elif st.session_state.role == "user_dashboard":
                         st.write(f"📅 **Date:** {s[2]} | ⏰ **Time:** {s[3]}")
                         st.write(s[4])
                         
-                        # --- NEW: Check if bookings are active ---
                         if s[6]: # If is_active is True
                             if st.button(f"Book Seats for {s[1]}", key=f"book_page_{s[0]}", type="primary"):
                                 st.session_state.current_page = ("book", s[0], s[1])
                                 st.rerun()
                         else:
                             st.error("🚫 Bookings are currently closed for this show.")
+                            
+        # --- THE 'ELSE' BLOCK: The Interactive Seat Map ---
+        else:
+            page_type, show_id, show_title = st.session_state.current_page
+            st.subheader(f"Booking Map: {show_title}")
+            
+            # 1. Map Generation: Get seats booked by ANYONE for this specific showtime
+            booked_records = run_query("SELECT seat_num FROM booked_seats WHERE show_id=%s", (show_id,), fetch="all")
+            booked = [r[0] for r in booked_records]
+            
+            # 2. QUOTA LOGIC: Get count of seats booked by THIS USER for THIS MOVIE TITLE across ALL showtimes
+            query = '''SELECT b.seat_num 
+                       FROM booked_seats b 
+                       JOIN shows s ON b.show_id = s.id 
+                       WHERE s.title = %s AND b.user_id = %s'''
+            user_movie_booked_records = run_query(query, (show_title, user[0]), fetch="all")
+            user_booked_count = len(user_movie_booked_records)
+            
+            remaining_quota = user[4] - user_booked_count
+            st.info(f"Your Tier Quota remaining for ALL timings of '{show_title}': {remaining_quota} seats (Max allowance: {user[4]})")
+            
+            with st.form(key=f"seat_booking_form_{show_id}"):
+                st.markdown("<div style='background-color:black;color:white;text-align:center;padding:10px;'>SCREEN</div><br>", unsafe_allow_html=True)
+                
+                selected_seats = []
+                
+                for row in ROWS:
+                    cat = 'Gold' if row == 'J' else ('Silver' if row in ['G','H','I'] else 'Standard')
+                    is_disabled = (cat != user[2])
+                    
+                    cols = st.columns(30)
+                    cols[0].write(f"**{row}**")
+                    
+                    for c in range(1, 29):
+                        seat_id = f"{row}{c}"
+                        col_index = c if c <= 14 else c + 1  
+                        
+                        with cols[col_index]:
+                            if seat_id in booked:
+                                st.markdown("🔴") 
+                            elif is_disabled:
+                                st.markdown("⚪") 
+                            else:
+                                if st.checkbox(f"{c}", key=f"chk_{seat_id}", label_visibility="collapsed"):
+                                    selected_seats.append(seat_id)
+                                
+                    cols[29].write(f"**{row}**")
+                    
+                st.write("")
+                
+                submitted = st.form_submit_button("Confirm & Pay Booking", type="primary")
+                
+                if submitted:
+                    if not selected_seats:
+                        st.error("No seats selected.")
+                    elif len(selected_seats) > remaining_quota:
+                        st.error(f"You selected {len(selected_seats)} seats, but your remaining tier quota for '{show_title}' is only {remaining_quota}.")
+                    else:
+                        booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                        insert_data = [(show_id, seat, user[0], booking_ref) for seat in selected_seats]
+                        run_query("INSERT INTO booked_seats (show_id, seat_num, user_id, booking_ref) VALUES (%s, %s, %s, %s)", insert_data, execute_many=True)
+                        
+                        st.success("Booking saved successfully! Check the 'Tickets & Receipts' tab to fetch your receipt.")
+                        st.session_state.current_page = None
+                        st.rerun()
+                        
+            if st.button("Cancel & Go Back"):
+                st.session_state.current_page = None
+                st.rerun()
     # Tab 2: Tickets Management
     with utab2:
         st.subheader("My Past Bookings")
